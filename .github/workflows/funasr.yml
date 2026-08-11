@@ -1,11 +1,21 @@
+# 本工作流启动 FunASR（OpenAI 兼容）API 服务器，
+# 并验证其能够成功启动、加载 paraformer-zh 模型并进入就绪状态。
+
 name: FunASR API Deploy Test
 
+# 控制工作流的运行时机
+on:
+  # 在 pull request 事件（且仅针对 "main" 分支）时触发工作流
+  pull_request:
+    branches: [ "main" ]
+
+  # 允许从 Actions 页面手动运行此工作流
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 3600
     env:
       SERVER_PORT: "10095"
       SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
@@ -74,7 +84,7 @@ jobs:
           # 服务已就绪后，本步骤在前台持续运行，使后台的 FunASR server 进程
           # 得以存活（若 job/步骤结束时，托管 runner 可能清理残留的后台进程，
           # 因此保持一个前台步骤常驻即可维持服务）。
-          # 实际运行时长受 job 级 timeout-minutes: 360 约束。
+          # 实际运行时长受 job 级 timeout-minutes: 3600 约束。
           echo "FunASR server is ready; keeping runner alive to keep the server running."
           while true; do
             sleep 60
