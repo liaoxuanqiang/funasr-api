@@ -40,7 +40,9 @@ jobs:
           # Start the OpenAI-compatible funasr-server in the background. The
           # paraformer-zh model (with VAD and punctuation) is preloaded at
           # startup and downloaded on first launch if not cached. CPU is used
-          # because GitHub-hosted runners have no GPU.
+          # because GitHub-hosted runners have no GPU. Models are pulled from
+          # HuggingFace (--hub hf) instead of ModelScope, which is faster and
+          # more reliable from GitHub-hosted runners.
           #
           # Startup and the readiness poll are kept in the SAME step: hosted
           # runners may terminate leftover background processes when a step
@@ -50,6 +52,7 @@ jobs:
             --port 10095 \
             --device cpu \
             --model paraformer \
+            --hub hf \
             > funasr.log 2>&1 &
           SERVER_PID=$!
           echo "FunASR server PID: $SERVER_PID"
