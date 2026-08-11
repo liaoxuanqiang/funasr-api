@@ -19,8 +19,6 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -60,7 +58,7 @@ jobs:
           # The server only binds the port after the paraformer-zh model has
           # been preloaded, so a healthy /health response listing "paraformer"
           # confirms both server startup and model readiness. Give the initial
-          # ModelScope model download generous time (600 * 5s = 50 min).
+          # HuggingFace model download generous time (600 * 5s = 50 min).
           for i in $(seq 1 600); do
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
