@@ -35,27 +35,30 @@ jobs:
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
 
-      - name: Start FunASR server (paraformer-zh)
+      - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
-          # Start the OpenAI-compatible funasr-server in the background.
-          # The paraformer-zh model (with VAD and punctuation) is preloaded at
+          # Start the OpenAI-compatible funasr-server in the background. The
+          # paraformer-zh model (with VAD and punctuation) is preloaded at
           # startup and downloaded on first launch if not cached. CPU is used
           # because GitHub-hosted runners have no GPU.
+          #
+          # Startup and the readiness poll are kept in the SAME step: hosted
+          # runners may terminate leftover background processes when a step
+          # ends, so polling from a later step can find no listener on the port.
           nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
             --port 10095 \
             --device cpu \
             --model paraformer \
             > funasr.log 2>&1 &
+          SERVER_PID=$!
+          echo "FunASR server PID: $SERVER_PID"
 
-          echo "FunASR server PID: $!"
-
-      - name: Wait for FunASR server readiness
-        run: |
-          # The server binds the port only after the paraformer-zh model has been
-          # preloaded, so /health returning ok with "paraformer" loaded confirms
-          # both server startup and model readiness.
-          for i in $(seq 1 150); do
+          # The server only binds the port after the paraformer-zh model has
+          # been preloaded, so a healthy /health response listing "paraformer"
+          # confirms both server startup and model readiness. Give the initial
+          # ModelScope model download generous time (600 * 5s = 50 min).
+          for i in $(seq 1 600); do
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "FunASR server health: $body"
@@ -64,9 +67,23 @@ jobs:
                 exit 0
               fi
             fi
-            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/150)"
-            sleep 4
+            # Fail fast if the server process exited or crashed.
+            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+              echo "FunASR server process ($SERVER_PID) exited early."
+              break
+            fi
+            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/600)"
+            sleep 5
           done
           echo "FunASR server did not become ready in time."
+          echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
+
+      - name: Upload FunASR server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: funasr-server-log
+          path: funasr.log
+          if-no-files-found: ignore
