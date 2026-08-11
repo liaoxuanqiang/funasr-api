@@ -1,4 +1,4 @@
-# This workflow starts the FunASR offline HTTP API server
+# This workflow starts the FunASR (OpenAI-compatible) API server
 # and verifies it can be started, load the paraformer-zh model, and becomes ready.
 
 name: FunASR API Deploy Test
@@ -17,10 +17,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-22.04
-    env:
-      FunASR_MODEL_DIR: /tmp/funasr-models
-      FunASR_PORTS: 10095
-      FunASR_BRD_PORT: 10096
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -34,31 +30,41 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -U funasr torch torchaudio modelscope
+          # Extra packages required by the funasr-server (OpenAI-compatible) entrypoint.
+          pip install uvicorn fastapi python-multipart
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
 
-      - name: Start FunASR offline server (paraformer-zh)
-        env:
-          FUNASR_DEBUG: "1"
+      - name: Start FunASR server (paraformer-zh)
         run: |
-          # Start the offline HTTP server in the background, downloading the
-          # paraformer-zh model on first launch if not cached.
-          nohup python -m funasr.server \
+          # Start the OpenAI-compatible funasr-server in the background.
+          # The paraformer-zh model (with VAD and punctuation) is preloaded at
+          # startup and downloaded on first launch if not cached. CPU is used
+          # because GitHub-hosted runners have no GPU.
+          nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
             --port 10095 \
-            --backend-model "paraformer-zh:asr" \
+            --device cpu \
+            --model paraformer \
             > funasr.log 2>&1 &
 
           echo "FunASR server PID: $!"
 
       - name: Wait for FunASR server readiness
         run: |
-          for i in $(seq 1 90); do
-            if curl -sf http://127.0.0.1:10095/healthcheck > /dev/null 2>&1; then
-              echo "FunASR server is ready"
-              exit 0
+          # The server binds the port only after the paraformer-zh model has been
+          # preloaded, so /health returning ok with "paraformer" loaded confirms
+          # both server startup and model readiness.
+          for i in $(seq 1 150); do
+            body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
+            if [ -n "$body" ]; then
+              echo "FunASR server health: $body"
+              if echo "$body" | grep -q '"paraformer"'; then
+                echo "FunASR server is ready and paraformer-zh model is loaded"
+                exit 0
+              fi
             fi
-            echo "Waiting for FunASR server to start... ($i/90)"
+            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/150)"
             sleep 4
           done
           echo "FunASR server did not become ready in time."
