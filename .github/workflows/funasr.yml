@@ -18,6 +18,10 @@ jobs:
   deploy:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
+    env:
+      SERVER_PORT: "10095"
+      SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
+      KEEP_ALIVE_SECONDS: "1800"
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -80,3 +84,47 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
+
+      - name: Keep-alive watchdog for FunASR server
+        run: |
+          # 保活进程：服务就绪后持续监控 /health，若进程崩溃则自动重启，
+          # 直到 KEEP_ALIVE_SECONDS 时长结束（默认 30 分钟，可用该变量调整）。
+          # 注意必须使用 nohup 与 server 相同的启动命令，保证重启后模型已缓存。
+          SECONDS_TOTAL=0
+          CONSECUTIVE_FAILS=0
+
+          echo "Keep-alive watchdog started; monitoring ${SERVER_HEALTH_URL} for ${KEEP_ALIVE_SECONDS}s."
+
+          while [ "$SECONDS_TOTAL" -lt "$KEEP_ALIVE_SECONDS" ]; do
+            body=$(curl -sf "$SERVER_HEALTH_URL" 2>/dev/null || true)
+            if [ -n "$body" ] && echo "$body" | grep -q '"paraformer"'; then
+              CONSECUTIVE_FAILS=0
+              echo "[t=${SECONDS_TOTAL}s] FunASR server healthy: $(echo "$body" | head -c 120)"
+            else
+              CONSECUTIVE_FAILS=$(( CONSECUTIVE_FAILS + 1 ))
+              echo "[t=${SECONDS_TOTAL}s] FunASR server unreachable (fail #$CONSECUTIVE_FAILS)"
+              # 连续 3 次探活失败才重启，避免偶发抖动触发无谓重启。
+              if [ "$CONSECUTIVE_FAILS" -ge 3 ]; then
+                echo "Restarting FunASR server..."
+                pkill -f "funasr.bin.server" 2>/dev/null || true
+                nohup python -m funasr.bin.server \
+                  --host 127.0.0.1 \
+                  --port "$SERVER_PORT" \
+                  --device cpu \
+                  --model paraformer \
+                  --hub hf \
+                  >> funasr.log 2>&1 &
+                echo "FunASR server restarted, PID: $!"
+                CONSECUTIVE_FAILS=0
+              fi
+            fi
+            sleep 15
+            SECONDS_TOTAL=$(( SECONDS_TOTAL + 15 ))
+          done
+
+          echo "Keep-alive period (${KEEP_ALIVE_SECONDS}s) finished."
+          # 结束时做一次最终健康检查，并输出日志尾部便于审计。
+          echo "===== Final health check ====="
+          curl -s "$SERVER_HEALTH_URL" || echo "Server not responding at end of keep-alive."
+          echo "===== tail -50 funasr.log ====="
+          tail -50 funasr.log || true
