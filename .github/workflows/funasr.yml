@@ -29,7 +29,7 @@ jobs:
       - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
           nohup python -m funasr.bin.server \
-            --host 127.0.0.1 \
+            --host 0.0.0.0 \
             --port 10095 \
             --device cpu \
             --model paraformer \
