@@ -1,15 +1,9 @@
-# 本工作流启动 FunASR（OpenAI 兼容）API 服务器，
-# 并验证其能够成功启动、加载 paraformer-zh 模型并进入就绪状态。
-
 name: FunASR API Deploy Test
 
-# 控制工作流的运行时机
 on:
-  # 在 pull request 事件（且仅针对 "main" 分支）时触发工作流
   pull_request:
     branches: [ "main" ]
 
-  # 允许从 Actions 页面手动运行此工作流
   workflow_dispatch:
 
 jobs:
@@ -29,21 +23,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -U funasr torch torchaudio modelscope
-          # funasr-server（OpenAI 兼容）入口所需的其他依赖包。
           pip install uvicorn fastapi python-multipart
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
 
       - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
-          # 在后台启动 OpenAI 兼容的 funasr-server。paraformer-zh 模型（含 VAD
-          # 与标点）会在启动时预加载，若本地未缓存则首次启动时自动下载。由于
-          # GitHub 托管的 runner 没有 GPU，此处使用 CPU。模型从 HuggingFace
-          # （--hub hf）而非 ModelScope 拉取，这对 GitHub 托管 runner 而言更快
-          # 也更可靠。
-          #
-          # 启动与就绪轮询放在同一个步骤中：托管 runner 可能在步骤结束时终止
-          # 残留的后台进程，因此若在后续步骤中轮询，可能发现端口上没有监听。
           nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
             --port 10095 \
@@ -54,9 +39,6 @@ jobs:
           SERVER_PID=$!
           echo "FunASR server PID: $SERVER_PID"
 
-          # 服务器只有在 paraformer-zh 模型预加载完成后才会绑定端口，因此一个
-          # 列出 "paraformer" 的健康 /health 响应即可同时确认服务器启动与模型
-          # 就绪。为首次 HuggingFace 模型下载预留充足时间（600 * 5s = 50 分钟）。
           for i in $(seq 1 600); do
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
@@ -66,7 +48,6 @@ jobs:
                 exit 0
               fi
             fi
-            # 若服务器进程已退出或崩溃，则快速失败。
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
               echo "FunASR server process ($SERVER_PID) exited early."
               break
@@ -81,10 +62,6 @@ jobs:
 
       - name: Keep runner alive (maintain FunASR server)
         run: |
-          # 服务已就绪后，本步骤在前台持续运行，使后台的 FunASR server 进程
-          # 得以存活（若 job/步骤结束时，托管 runner 可能清理残留的后台进程，
-          # 因此保持一个前台步骤常驻即可维持服务）。
-          # 实际运行时长受 job 级 timeout-minutes: 3600 约束。
           echo "FunASR server is ready; keeping runner alive to keep the server running."
           while true; do
             sleep 60
