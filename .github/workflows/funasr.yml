@@ -1,27 +1,14 @@
-# This workflow starts the FunASR (OpenAI-compatible) API server
-# and verifies it can be started, load the paraformer-zh model, and becomes ready.
-
 name: FunASR API Deploy Test
 
-# Controls when the workflow will run
-on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       SERVER_PORT: "10095"
       SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
-      KEEP_ALIVE_SECONDS: "1800"
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,23 +19,21 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -U funasr torch torchaudio modelscope
-          # Extra packages required by the funasr-server (OpenAI-compatible) entrypoint.
+          # funasr-server（OpenAI 兼容）入口所需的其他依赖包。
           pip install uvicorn fastapi python-multipart
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
 
       - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
-          # Start the OpenAI-compatible funasr-server in the background. The
-          # paraformer-zh model (with VAD and punctuation) is preloaded at
-          # startup and downloaded on first launch if not cached. CPU is used
-          # because GitHub-hosted runners have no GPU. Models are pulled from
-          # HuggingFace (--hub hf) instead of ModelScope, which is faster and
-          # more reliable from GitHub-hosted runners.
+          # 在后台启动 OpenAI 兼容的 funasr-server。paraformer-zh 模型（含 VAD
+          # 与标点）会在启动时预加载，若本地未缓存则首次启动时自动下载。由于
+          # GitHub 托管的 runner 没有 GPU，此处使用 CPU。模型从 HuggingFace
+          # （--hub hf）而非 ModelScope 拉取，这对 GitHub 托管 runner 而言更快
+          # 也更可靠。
           #
-          # Startup and the readiness poll are kept in the SAME step: hosted
-          # runners may terminate leftover background processes when a step
-          # ends, so polling from a later step can find no listener on the port.
+          # 启动与就绪轮询放在同一个步骤中：托管 runner 可能在步骤结束时终止
+          # 残留的后台进程，因此若在后续步骤中轮询，可能发现端口上没有监听。
           nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
             --port 10095 \
@@ -59,10 +44,9 @@ jobs:
           SERVER_PID=$!
           echo "FunASR server PID: $SERVER_PID"
 
-          # The server only binds the port after the paraformer-zh model has
-          # been preloaded, so a healthy /health response listing "paraformer"
-          # confirms both server startup and model readiness. Give the initial
-          # HuggingFace model download generous time (600 * 5s = 50 min).
+          # 服务器只有在 paraformer-zh 模型预加载完成后才会绑定端口，因此一个
+          # 列出 "paraformer" 的健康 /health 响应即可同时确认服务器启动与模型
+          # 就绪。为首次 HuggingFace 模型下载预留充足时间（600 * 5s = 50 分钟）。
           for i in $(seq 1 600); do
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
@@ -72,7 +56,7 @@ jobs:
                 exit 0
               fi
             fi
-            # Fail fast if the server process exited or crashed.
+            # 若服务器进程已退出或崩溃，则快速失败。
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
               echo "FunASR server process ($SERVER_PID) exited early."
               break
@@ -85,46 +69,14 @@ jobs:
           tail -200 funasr.log
           exit 1
 
-      - name: Keep-alive watchdog for FunASR server
+      - name: Keep runner alive (maintain FunASR server)
         run: |
-          # 保活进程：服务就绪后持续监控 /health，若进程崩溃则自动重启，
-          # 直到 KEEP_ALIVE_SECONDS 时长结束（默认 30 分钟，可用该变量调整）。
-          # 注意必须使用 nohup 与 server 相同的启动命令，保证重启后模型已缓存。
-          SECONDS_TOTAL=0
-          CONSECUTIVE_FAILS=0
-
-          echo "Keep-alive watchdog started; monitoring ${SERVER_HEALTH_URL} for ${KEEP_ALIVE_SECONDS}s."
-
-          while [ "$SECONDS_TOTAL" -lt "$KEEP_ALIVE_SECONDS" ]; do
-            body=$(curl -sf "$SERVER_HEALTH_URL" 2>/dev/null || true)
-            if [ -n "$body" ] && echo "$body" | grep -q '"paraformer"'; then
-              CONSECUTIVE_FAILS=0
-              echo "[t=${SECONDS_TOTAL}s] FunASR server healthy: $(echo "$body" | head -c 120)"
-            else
-              CONSECUTIVE_FAILS=$(( CONSECUTIVE_FAILS + 1 ))
-              echo "[t=${SECONDS_TOTAL}s] FunASR server unreachable (fail #$CONSECUTIVE_FAILS)"
-              # 连续 3 次探活失败才重启，避免偶发抖动触发无谓重启。
-              if [ "$CONSECUTIVE_FAILS" -ge 3 ]; then
-                echo "Restarting FunASR server..."
-                pkill -f "funasr.bin.server" 2>/dev/null || true
-                nohup python -m funasr.bin.server \
-                  --host 127.0.0.1 \
-                  --port "$SERVER_PORT" \
-                  --device cpu \
-                  --model paraformer \
-                  --hub hf \
-                  >> funasr.log 2>&1 &
-                echo "FunASR server restarted, PID: $!"
-                CONSECUTIVE_FAILS=0
-              fi
-            fi
-            sleep 15
-            SECONDS_TOTAL=$(( SECONDS_TOTAL + 15 ))
+          # 服务已就绪后，本步骤在前台持续运行，使后台的 FunASR server 进程
+          # 得以存活（若 job/步骤结束时，托管 runner 可能清理残留的后台进程，
+          # 因此保持一个前台步骤常驻即可维持服务）。
+          # 实际运行时长受 job 级 timeout-minutes: 360 约束。
+          echo "FunASR server is ready; keeping runner alive to keep the server running."
+          while true; do
+            sleep 60
           done
 
-          echo "Keep-alive period (${KEEP_ALIVE_SECONDS}s) finished."
-          # 结束时做一次最终健康检查，并输出日志尾部便于审计。
-          echo "===== Final health check ====="
-          curl -s "$SERVER_HEALTH_URL" || echo "Server not responding at end of keep-alive."
-          echo "===== tail -50 funasr.log ====="
-          tail -50 funasr.log || true
