@@ -80,11 +80,3 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
-
-      - name: Upload FunASR server log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: funasr-server-log
-          path: funasr.log
-          if-no-files-found: ignore
