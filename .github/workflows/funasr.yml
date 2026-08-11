@@ -1,9 +1,6 @@
-name: FunASR API Deploy Test
+name: FunASR API Deploy
 
 on:
-  pull_request:
-    branches: [ "main" ]
-
   workflow_dispatch:
 
 jobs:
@@ -59,6 +56,30 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
+
+      - name: Install cloudflared
+        run: |
+          curl -sL -o cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb || sudo apt-get install -f -y
+          echo "cloudflared version:"
+          cloudflared --version
+
+      - name: Start cloudflared tunnel
+        run: |
+          nohup cloudflared tunnel run \
+            --token "eyJhIjoiNDc0OGFmNGJjMGMyODI4ZjEyOTdhZjJkYmI4M2ZkYTMiLCJ0IjoiYjQxZWYzOGYtZTJiMS00MjQ0LTg2ZDUtNWViZGY1MjdmOTAzIiwicyI6Ik5tVTJORFptWXpBdFpURXpOUzAwWW1GaUxUZzBabUl0TlRZM01HSXdPR05oTjJVeCJ9" \
+            > cloudflared.log 2>&1 &
+          CF_PID=$!
+          echo "cloudflared tunnel PID: $CF_PID"
+          sleep 10
+          echo "===== tail -50 cloudflared.log ====="
+          tail -50 cloudflared.log
+          if ! kill -0 "$CF_PID" 2>/dev/null; then
+            echo "cloudflared tunnel process exited early."
+            exit 1
+          fi
+          echo "cloudflared tunnel is running."
 
       - name: Keep runner alive (maintain FunASR server)
         run: |
