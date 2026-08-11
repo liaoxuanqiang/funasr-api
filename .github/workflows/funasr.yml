@@ -10,6 +10,8 @@ jobs:
     env:
       SERVER_PORT: "10095"
       SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
+      TS_AUTH_KEY: ${{ secrets.TS_AUTH_KEY }}
+      TS_API_TOKEN: ${{ secrets.TS_API_TOKEN }}
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,29 +59,27 @@ jobs:
           tail -200 funasr.log
           exit 1
 
-      - name: Install cloudflared
+      - name: Install Tailscale
         run: |
-          curl -sL -o cloudflared.deb \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb || sudo apt-get install -f -y
-          echo "cloudflared version:"
-          cloudflared --version
+          curl -fsSL https://tailscale.com/install.sh | sh
+          echo "Tailscale version:"
+          tailscale version
 
-      - name: Start cloudflared tunnel
+      - name: Start tailscaled, authenticate and enable Tailscale SSH
         run: |
-          nohup cloudflared tunnel run \
-            --token "eyJhIjoiNDc0OGFmNGJjMGMyODI4ZjEyOTdhZjJkYmI4M2ZkYTMiLCJ0IjoiYjQxZWYzOGYtZTJiMS00MjQ0LTg2ZDUtNWViZGY1MjdmOTAzIiwicyI6Ik5tVTJORFptWXpBdFpURXpOUzAwWW1GaUxUZzBabUl0TlRZM01HSXdPR05oTjJVeCJ9" \
-            > cloudflared.log 2>&1 &
-          CF_PID=$!
-          echo "cloudflared tunnel PID: $CF_PID"
-          sleep 10
-          echo "===== tail -50 cloudflared.log ====="
-          tail -50 cloudflared.log
-          if ! kill -0 "$CF_PID" 2>/dev/null; then
-            echo "cloudflared tunnel process exited early."
-            exit 1
-          fi
-          echo "cloudflared tunnel is running."
+          sudo nohup tailscaled \
+            --state=/var/lib/tailscale/tailscaled.state \
+            --socket=/var/run/tailscale/tailscaled.sock \
+            > /var/log/tailscaled.log 2>&1 &
+          sleep 3
+          sudo tailscale up \
+            --authkey "$TS_AUTH_KEY" \
+            --ssh \
+            --hostname funasr-runner
+          echo "===== Tailscale status ====="
+          tailscale status
+          echo "API access token is available for Tailscale Admin API calls:"
+          echo "TS_API_TOKEN=$TS_API_TOKEN"
 
       - name: Keep runner alive (maintain FunASR server)
         run: |
