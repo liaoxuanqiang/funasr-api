@@ -1,30 +1,62 @@
+# ============================================
+# FunASR API 部署工作流
+# 功能：在 GitHub Actions 上部署 FunASR 语音识别服务，
+#       并通过 Cloudflare Tunnel 将其暴露到公网。
+# ============================================
+
+# 工作流名称（显示在 GitHub Actions 页面上）
 name: FunASR API Deploy
 
+# 触发方式：仅支持手动触发
+# （在仓库 Actions 页面点击 "Run workflow" 按钮执行）
 on:
   workflow_dispatch:
 
+# ============ 任务定义 ============
 jobs:
+  # 部署任务
   deploy:
+    # 运行环境：使用 Ubuntu 22.04
     runs-on: ubuntu-22.04
+    # 超时时间：3600 分钟（约 60 小时）
+    # 目的是保持 runner 长时间存活，从而维持服务持续运行
     timeout-minutes: 3600
+    # 环境变量配置
     env:
+      # FunASR 服务监听端口
       SERVER_PORT: "10095"
+      # 服务健康检查地址（用于判断服务器是否就绪）
       SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
+    # 执行步骤列表
     steps:
+      # ---- 步骤1：配置 Python 环境 ----
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
+          # 指定 Python 版本
           python-version: "3.10"
 
+      # ---- 步骤2：安装 FunASR 及所需的依赖包 ----
       - name: Install dependencies
         run: |
+          # 升级 pip 到最新版本
           python -m pip install --upgrade pip
+          # 安装 FunASR 语音识别框架、PyTorch 及模型下载工具
           pip install -U funasr torch torchaudio modelscope
+          # 安装 Web API 服务所需依赖
           pip install uvicorn fastapi python-multipart
+          # 打印安装的 FunASR 版本，便于确认安装成功
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
+      # ---- 步骤3：启动 FunASR 服务器（paraformer-zh 中文识别模型）并等待就绪 ----
       - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
+          # 使用 nohup 后台启动服务器，日志输出到 funasr.log
+          # --host 127.0.0.1  仅本机监听，后续由 cloudflared 反向代理
+          # --port 10095     服务器端口
+          # --device cpu     使用 CPU 推理
+          # --model paraformer  使用 paraformer-zh 中文语音识别模型
+          # --hub hf         从 HuggingFace 下载模型
           nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
             --port 10095 \
@@ -32,9 +64,12 @@ jobs:
             --model paraformer \
             --hub hf \
             > funasr.log 2>&1 &
+          # 记录 FunASR 服务器进程 PID，用于后续检测进程是否存活
           SERVER_PID=$!
           echo "FunASR server PID: $SERVER_PID"
+          # 最多轮询 600 次（每 5 秒一次，最长等待约 50 分钟）直到服务就绪
           for i in $(seq 1 600); do
+            # 请求健康检查接口获取服务状态（失败时忽略错误继续轮询）
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "FunASR server health: $body"
@@ -54,20 +89,31 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
+      # ---- 步骤4：安装 cloudflared（Cloudflare Tunnel 客户端）----
+      # 作用：建立内网穿透隧道，将本机 FunASR 服务暴露到公网域名
       - name: Install cloudflared
         run: |
+          # 下载 cloudflared 的 deb 安装包
           curl -sL -o cloudflared.deb \
             https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          # 安装 deb 包；若依赖缺失则自动修复后重装
           sudo dpkg -i cloudflared.deb || sudo apt-get install -f -y
+          # 打印版本号确认安装成功
           echo "cloudflared version:"
           cloudflared --version
+      # ---- 步骤5：启动 Cloudflare Tunnel，将 FunASR 服务映射到公网 ----
       - name: Start cloudflared tunnel
         run: |
+          # 使用 Token 后台启动隧道（日志输出到 cloudflared.log）
+          # 注意：此处 Token 为敏感凭据，建议改为引用 GitHub Secrets 变量，
+          # 例如：--token "${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}"
           nohup cloudflared tunnel run \
             --token "eyJhIjoiNDc0OGFmNGJjMGMyODI4ZjEyOTdhZjJkYmI4M2ZkYTMiLCJ0IjoiYjQxZWYzOGYtZTJiMS00MjQ0LTg2ZDUtNWViZGY1MjdmOTAzIiwicyI6Ik5tVTJORFptWXpBdFpURXpOUzAwWW1GaUxUZzBabUl0TlRZM01HSXdPR05oTjJVeCJ9" \
             > cloudflared.log 2>&1 &
+          # 记录隧道进程 PID
           CF_PID=$!
           echo "cloudflared tunnel PID: $CF_PID"
+          # 等待 10 秒让隧道完成初始化
           sleep 10
           echo "===== tail -50 cloudflared.log ====="
           tail -50 cloudflared.log
@@ -76,9 +122,11 @@ jobs:
             exit 1
           fi
           echo "cloudflared tunnel is running."
+      # ---- 步骤6：保持 runner 一直存活，让 FunASR 服务持续运行 ----
       - name: Keep runner alive (maintain FunASR server)
         run: |
           echo "FunASR server is ready; keeping runner alive to keep the server running."
+          # 无限循环：一旦退出，runner 结束，FunASR 服务也会随之停止
           while true; do
             sleep 60
           done
