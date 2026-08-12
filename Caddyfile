@@ -1,0 +1,33 @@
+# Caddy gateway for the FunASR deployment.
+#
+# The Cloudflare Tunnel origin is fixed by the dashboard-managed (remote)
+# config to http://localhost:10095. Caddy listens on :10095 and:
+#   * serves the PWA static frontend (pwa/) at the site root, and
+#   * reverse-proxies the FunASR HTTP API paths to the internal ASR server
+#     (running on port 10097).
+#
+# Run with:  caddy run --config Caddyfile
+# (the working directory must be the repository root so that
+#  {$GITHUB_WORKSPACE} resolves to the checked-out source).
+
+{
+    admin off
+    auto_https off
+}
+
+:10095 {
+    encode gzip
+
+    # ---- FunASR API paths are forwarded to the internal ASR server ----
+    @funasr path /health /asr /recognize /v1/* /docs /openapi.json /redoc
+    handle @funasr {
+        reverse_proxy 127.0.0.1:10097
+    }
+
+    # ---- Everything else: serve the PWA (SPA fallback to index.html) ----
+    handle {
+        root * {$GITHUB_WORKSPACE}/pwa
+        try_files {path} /index.html
+        file_server
+    }
+}

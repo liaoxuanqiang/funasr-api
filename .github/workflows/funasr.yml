@@ -14,9 +14,16 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
+      # Caddy PWA gateway port (the Cloudflare Tunnel origin is fixed by the
+      # dashboard-managed remote config to http://localhost:10095).
       SERVER_PORT: "10095"
+      # Internal FunASR ASR server port (behind the Caddy gateway).
+      ASR_PORT: "10097"
       SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -41,15 +48,15 @@ jobs:
         run: |
           nohup python -m funasr.bin.server \
             --host 127.0.0.1 \
-            --port 10095 \
+            --port $ASR_PORT \
             --device cpu \
             --model paraformer \
             --hub hf \
             > funasr.log 2>&1 &
           SERVER_PID=$!
-          echo "FunASR server PID: $SERVER_PID"
+          echo "FunASR server PID: $SERVER_PID (port $ASR_PORT)"
           for i in $(seq 1 60); do
-            body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
+            body=$(curl -sf http://127.0.0.1:$ASR_PORT/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "FunASR server health: $body"
               if echo "$body" | grep -qE '"(model|server|status|ready)"|"paraformer"'; then
@@ -68,6 +75,59 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
+
+      - name: Install Caddy
+        run: |
+          curl -fsSL -o caddy.tar.gz \
+            "https://caddyserver.com/api/download?os=linux&arch=amd64"
+          tar -xzf caddy.tar.gz
+          sudo mv caddy /usr/local/bin/
+          echo "Caddy version:"
+          caddy version
+
+      - name: Start PWA gateway (Caddy) and verify
+        run: |
+          nohup caddy run --config Caddyfile > caddy.log 2>&1 &
+          CADDY_PID=$!
+          echo "Caddy PWA gateway PID: $CADDY_PID (port $SERVER_PORT)"
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "http://127.0.0.1:$SERVER_PORT/"; then
+              echo "PWA is being served at http://127.0.0.1:$SERVER_PORT/ ($i/30)"
+              break
+            fi
+            if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+              echo "Caddy process exited early."
+              break
+            fi
+            echo "Waiting for PWA gateway to start... ($i/30)"
+            sleep 2
+          done
+          echo "===== PWA sanity checks ====="
+          curl -fsS "http://127.0.0.1:$SERVER_PORT/" | grep -Eo '<title>[^<]+</title>' || true
+          curl -fsS -o /dev/null -w "manifest.webmanifest -> %{http_code} %{content_type}\n" \
+            "http://127.0.0.1:$SERVER_PORT/manifest.webmanifest"
+          curl -fsS -o /dev/null -w "icon-512.png        -> %{http_code} %{content_type}\n" \
+            "http://127.0.0.1:$SERVER_PORT/icons/icon-512.png"
+          curl -fsS -o /dev/null -w "service worker      -> %{http_code} %{content_type}\n" \
+            "http://127.0.0.1:$SERVER_PORT/sw.js"
+          body=$(curl -sf "http://127.0.0.1:$SERVER_PORT/health" 2>/dev/null || true)
+          echo "proxied /health -> $body"
+          if [ -z "$body" ] || ! echo "$body" | grep -qE '"(model|server|status|ready)"|"paraformer"'; then
+            echo "ERROR: gateway did not proxy /health to the FunASR backend."
+            echo "===== tail -100 caddy.log ====="
+            tail -100 caddy.log
+            echo "===== tail -100 funasr.log ====="
+            tail -100 funasr.log
+            exit 1
+          fi
+          if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+            echo "ERROR: Caddy process exited early."
+            echo "===== tail -100 caddy.log ====="
+            tail -100 caddy.log
+            exit 1
+          fi
+          echo "PWA gateway is ready."
+
       - name: Install cloudflared
         run: |
           curl -sL -o cloudflared.deb \
@@ -90,9 +150,9 @@ jobs:
             exit 1
           fi
           echo "cloudflared tunnel is running."
-      - name: Keep runner alive (maintain FunASR server)
+      - name: Keep runner alive (maintain FunASR server + PWA gateway)
         run: |
-          echo "FunASR server is ready; keeping runner alive to keep the server running."
+          echo "FunASR server + PWA gateway are ready; keeping runner alive to keep them running."
           while true; do
             sleep 60
           done
