@@ -164,6 +164,45 @@ jobs:
           fi
           echo "PWA gateway is ready."
 
+      - name: Smoke-test transcription API
+        run: |
+          # Generate a short silence WAV and POST it to /v1/audio/transcriptions
+          # to verify the end-to-end ASR pipeline (gateway -> FunASR backend).
+          # This surfaces any HTTP 500 from the ASR server during deployment,
+          # with funasr.log printed for diagnosis.
+          python - <<'PY'
+          import wave, struct, math, io
+          sr = 16000
+          frames = int(sr * 1.0)  # 1 second
+          with wave.open("smoke.wav", "wb") as w:
+              w.setnchannels(1)
+              w.setsampwidth(2)
+              w.setframerate(sr)
+              data = b"".join(
+                  struct.pack("<h", int(4000 * math.sin(2 * math.pi * 440 * i / sr)))
+                  for i in range(frames)
+              )
+              w.writeframes(data)
+          print("wrote smoke.wav")
+          PY
+          echo "===== POST /v1/audio/transcriptions ====="
+          resp=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+            -F "file=@smoke.wav;type=audio/wav" \
+            -F "model=paraformer" \
+            "http://127.0.0.1:$SERVER_PORT/v1/audio/transcriptions" 2>&1)
+          echo "$resp"
+          status=$(echo "$resp" | grep -o 'HTTP_STATUS:.*' | cut -d: -f2)
+          if [ "$status" = "200" ]; then
+            echo "SMOKE TEST PASSED: /v1/audio/transcriptions returned 200"
+          else
+            echo "ERROR: transcription smoke test failed (HTTP $status)."
+            echo "===== tail -200 funasr.log ====="
+            tail -200 funasr.log || true
+            echo "===== tail -100 caddy.log ====="
+            tail -100 caddy.log || true
+            exit 1
+          fi
+
       - name: Install cloudflared
         run: |
           curl -sL -o cloudflared.deb \

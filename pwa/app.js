@@ -299,11 +299,14 @@ async function transcribe() {
       const form = new FormData();
       form.append("file", state.audioFile, state.audioFile.name);
       form.append("model", model);
-      if (ep === "/v1/audio/transcriptions") {
-        if (language && language !== "auto") form.append("language", language);
-      } else {
+      // Only SenseVoice accepts a language hint; paraformer's generate() does
+      // not take a language argument (matches the HF demo), so omit it there.
+      const isSensevoice = /sensevoice/i.test(model);
+      if (isSensevoice && language && language !== "auto") {
+        form.append("language", language);
+      }
+      if (ep !== "/v1/audio/transcriptions") {
         form.append("device", "cpu");
-        if (language && language !== "auto") form.append("language", language);
       }
 
       const res = await fetch(ep, { method: "POST", body: form });
