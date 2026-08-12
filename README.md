@@ -100,7 +100,7 @@ concurrency:
 | 2 | Set up Python | 配置 Python 3.10 环境 |
 | 3 | Cache pip dependencies | 缓存 pip 下载的依赖包，加速安装 |
 | 4 | Install dependencies | 安装 `funasr`、`torch`、`torchaudio`、`modelscope`、`uvicorn`、`fastapi`、`python-multipart` |
-| 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `8080`，CPU 推理，`paraformer-zh` 模型，模型从 HuggingFace 下载），并轮询健康检查等待就绪 |
+| 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `8080`，CPU 推理，`paraformer-zh` 模型，模型从 ModelScope 下载），并轮询健康检查等待就绪 |
 | 6 | Install Caddy | 从 GitHub Releases 下载并安装固定版本 Caddy（v2.11.4，静态服务器 / 反向代理），含 gzip 完整性校验 |
 | 7 | Start PWA gateway | 在源站端口 `80` 启动 Caddy 网关：根路径 `/` 提供 PWA 界面，`/health`、`/asr`、`/recognize`、`/v1/*` 等反向代理到 FunASR，并执行 PWA 资源 / 代理连通性检查 |
 | 8 | Install cloudflared | 下载并安装 Cloudflare Tunnel 客户端 |
@@ -116,7 +116,7 @@ concurrency:
 | `SERVER_PORT` | `80` | Caddy PWA 网关监听端口（**隧道源站端口**，须与 Cloudflare 控制台入口一致） |
 | `ASR_PORT` | `8080` | FunASR 服务内网监听端口（仅本机可访问） |
 | `SERVER_HEALTH_URL` | `http://127.0.0.1:80/health` | 经网关的健康检查地址（验证 PWA 网关 → FunASR 链路） |
-| 模型 | `paraformer`（HuggingFace） | 中文语音识别模型，`--model paraformer` |
+| 模型 | `paraformer`（ModelScope） | 中文语音识别模型，`--model paraformer --hub ms` |
 | FunASR 健康检查轮询 | 60 次 × 5 秒 | 最长等待约 5 分钟 |
 | PWA 网关健康检查轮询 | 30 次 × 2 秒 | 最长等待约 1 分钟 |
 
