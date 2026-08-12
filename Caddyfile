@@ -5,9 +5,10 @@
 #   * reverse-proxies the FunASR HTTP API paths to the internal ASR server
 #     (running on port 8080).
 #
-# Run with:  caddy run --config Caddyfile
-# (the working directory must be the repository root so that
-#  {$GITHUB_WORKSPACE} resolves to the checked-out source).
+# NOTE: the root is a RELATIVE path (./pwa) so it does not depend on the
+# {$GITHUB_WORKSPACE} env var surviving sudo/daemonization. The workflow
+# launches Caddy from the repository root (cd $GITHUB_WORKSPACE first), and
+# the daemonized process keeps that working directory.
 
 {
     admin off
@@ -25,7 +26,7 @@
 
     # ---- Everything else: serve the PWA (SPA fallback to index.html) ----
     handle {
-        root * {$GITHUB_WORKSPACE}/pwa
+        root * ./pwa
         try_files {path} /index.html
         file_server
     }

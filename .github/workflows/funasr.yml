@@ -99,22 +99,22 @@ jobs:
         run: |
           # Port 80 is a privileged port (<1024); the runner user cannot bind to
           # it directly, so Caddy must run via sudo (required to bind to :80).
-          # sudo -E preserves the environment so the {$GITHUB_WORKSPACE} env
-          # placeholder in Caddyfile resolves to the checked-out source.
+          # Caddyfile uses a RELATIVE root (./pwa), so we cd into the workspace
+          # first; the daemonized process keeps that working directory.
           # "caddy start" daemonizes Caddy, then we wait for it to be reachable.
           echo "Starting Caddy gateway on port $SERVER_PORT (via sudo for privileged port)..."
-          sudo -E nohup caddy start --config Caddyfile --adapter caddyfile > caddy.log 2>&1
+          cd "$GITHUB_WORKSPACE"
+          sudo nohup caddy start --config Caddyfile --adapter caddyfile > caddy.log 2>&1
           START_EXIT=$?
           echo "caddy start exit code: $START_EXIT"
           echo "===== caddy.log ====="
           cat caddy.log
           echo "===== /usr/local/bin/caddy perms ====="
           ls -l /usr/local/bin/caddy || true
-          # Diagnostic: confirm the {$GITHUB_WORKSPACE} env placeholder used by
-          # Caddyfile resolves to an existing directory with the PWA files.
+          # Diagnostic: confirm the working directory and PWA root that Caddy uses.
           echo "===== workspace & pwa root diagnostics ====="
+          pwd
           echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          echo "sudo sees GITHUB_WORKSPACE: $(sudo -E printenv GITHUB_WORKSPACE || echo UNSET)"
           if [ -d "${GITHUB_WORKSPACE}/pwa" ]; then
             echo "OK: ${GITHUB_WORKSPACE}/pwa exists"
             ls -la "${GITHUB_WORKSPACE}/pwa" | head -n 12
