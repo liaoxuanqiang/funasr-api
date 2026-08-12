@@ -53,11 +53,11 @@ funasr-api/
 ```
 GitHub Actions Runner
     │
-    ├── 启动 FunASR 服务（127.0.0.1:10097，paraformer-zh 模型）
+    ├── 启动 FunASR 服务（127.0.0.1:8080，paraformer-zh 模型）
     │
     ├── 启动 Caddy PWA 网关（侦听 127.0.0.1:80，即隧道源站）
     │        ├── 静态服务：PWA 前端（根路径 /）
-    │        └── 反向代理：/health、/asr、/recognize、/v1/* 等 → FunASR (127.0.0.1:10097)
+    │        └── 反向代理：/health、/asr、/recognize、/v1/* 等 → FunASR (127.0.0.1:8080)
     │
     ├── Cloudflare Tunnel（cloudflared）→ 公网域名
     │
@@ -66,7 +66,7 @@ GitHub Actions Runner
 
 > 💡 为什么网关放在源站端口：当前隧道以 `--token` 运行，属于**远程托管（Remote Managed）**隧道，
 > 其入口规则由 Cloudflare 控制台远程配置决定并指向 `localhost:80`，工作流无法在本地覆盖。
-> 因此将 **Caddy 网关**绑定在 `80`（PWA + API 代理），FunASR 服务内移至 `10097`。
+> 因此将 **Caddy 网关**绑定在 `80`（PWA + API 代理），FunASR 服务内移至 `8080`。
 
 ## 工作流配置说明
 
@@ -100,7 +100,7 @@ concurrency:
 | 2 | Set up Python | 配置 Python 3.10 环境 |
 | 3 | Cache pip dependencies | 缓存 pip 下载的依赖包，加速安装 |
 | 4 | Install dependencies | 安装 `funasr`、`torch`、`torchaudio`、`modelscope`、`uvicorn`、`fastapi`、`python-multipart` |
-| 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `10097`，CPU 推理，`paraformer-zh` 模型，模型从 HuggingFace 下载），并轮询健康检查等待就绪 |
+| 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `8080`，CPU 推理，`paraformer-zh` 模型，模型从 HuggingFace 下载），并轮询健康检查等待就绪 |
 | 6 | Install Caddy | 从 GitHub Releases 下载并安装固定版本 Caddy（v2.11.4，静态服务器 / 反向代理），含 gzip 完整性校验 |
 | 7 | Start PWA gateway | 在源站端口 `80` 启动 Caddy 网关：根路径 `/` 提供 PWA 界面，`/health`、`/asr`、`/recognize`、`/v1/*` 等反向代理到 FunASR，并执行 PWA 资源 / 代理连通性检查 |
 | 8 | Install cloudflared | 下载并安装 Cloudflare Tunnel 客户端 |
@@ -114,7 +114,7 @@ concurrency:
 | `runs-on` | `ubuntu-22.04` | 运行环境 |
 | `timeout-minutes` | `360` | 任务超时上限（6 小时），超过后平台强制终止 |
 | `SERVER_PORT` | `80` | Caddy PWA 网关监听端口（**隧道源站端口**，须与 Cloudflare 控制台入口一致） |
-| `ASR_PORT` | `10097` | FunASR 服务内网监听端口（仅本机可访问） |
+| `ASR_PORT` | `8080` | FunASR 服务内网监听端口（仅本机可访问） |
 | `SERVER_HEALTH_URL` | `http://127.0.0.1:80/health` | 经网关的健康检查地址（验证 PWA 网关 → FunASR 链路） |
 | 模型 | `paraformer`（HuggingFace） | 中文语音识别模型，`--model paraformer` |
 | FunASR 健康检查轮询 | 60 次 × 5 秒 | 最长等待约 5 分钟 |
@@ -125,7 +125,7 @@ concurrency:
 | 名称 | 类型 | 位置 | 说明 |
 |------|------|------|------|
 | `SERVER_PORT` | 工作流变量 | 工作流 `env` | Caddy PWA 网关端口（默认 `80`，即隧道源站） |
-| `ASR_PORT` | 工作流变量 | 工作流 `env` | FunASR 服务内网端口（默认 `10097`） |
+| `ASR_PORT` | 工作流变量 | 工作流 `env` | FunASR 服务内网端口（默认 `8080`） |
 | `SERVER_HEALTH_URL` | 工作流变量 | 工作流 `env` | 经网关的健康检查地址 |
 | `CLOUDFLARE_TUNNEL_TOKEN` | **GitHub Secrets** | 仓库 Settings → Secrets and variables → Actions | Cloudflare Tunnel 的认证 Token |
 

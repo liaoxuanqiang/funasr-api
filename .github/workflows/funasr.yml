@@ -17,7 +17,7 @@ jobs:
       # Caddy PWA gateway port (the Cloudflare Tunnel origin must match this).
       SERVER_PORT: "80"
       # Internal FunASR ASR server port (behind the Caddy gateway).
-      ASR_PORT: "10097"
+      ASR_PORT: "8080"
       SERVER_HEALTH_URL: "http://127.0.0.1:80/health"
     steps:
       - name: Checkout repository
