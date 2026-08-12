@@ -97,16 +97,27 @@ jobs:
 
       - name: Start PWA gateway (Caddy) and verify
         run: |
-          nohup caddy run --config Caddyfile > caddy.log 2>&1 &
-          CADDY_PID=$!
-          echo "Caddy PWA gateway PID: $CADDY_PID (port $SERVER_PORT)"
+          # Port 80 is a privileged port (<1024); the runner user cannot bind to
+          # it directly, so Caddy must run via sudo (required to bind to :80).
+          # "caddy start" daemonizes Caddy, then we wait for it to be reachable.
+          echo "Starting Caddy gateway on port $SERVER_PORT (via sudo for privileged port)..."
+          sudo nohup caddy start --config Caddyfile --adapter caddyfile > caddy.log 2>&1
+          START_EXIT=$?
+          echo "caddy start exit code: $START_EXIT"
+          echo "===== caddy.log ====="
+          cat caddy.log
+          echo "===== /usr/local/bin/caddy perms ====="
+          ls -l /usr/local/bin/caddy || true
+          # Abort fast if Caddy failed to start (e.g. bind permission denied on :80).
+          if [ "$START_EXIT" -ne 0 ] || ! pgrep -x caddy >/dev/null 2>&1; then
+            echo "ERROR: Caddy failed to start on port $SERVER_PORT."
+            echo "===== tail -200 caddy.log ====="
+            tail -200 caddy.log
+            exit 1
+          fi
           for i in $(seq 1 30); do
             if curl -fsS -o /dev/null "http://127.0.0.1:$SERVER_PORT/"; then
               echo "PWA is being served at http://127.0.0.1:$SERVER_PORT/ ($i/30)"
-              break
-            fi
-            if ! kill -0 "$CADDY_PID" 2>/dev/null; then
-              echo "Caddy process exited early."
               break
             fi
             echo "Waiting for PWA gateway to start... ($i/30)"
@@ -130,7 +141,9 @@ jobs:
             tail -100 funasr.log
             exit 1
           fi
-          if ! kill -0 "$CADDY_PID" 2>/dev/null; then
+          # Since "caddy start" daemonized Caddy, verify it is still alive and
+          # serving after the readiness loop by checking the process list.
+          if ! pgrep -x caddy >/dev/null 2>&1; then
             echo "ERROR: Caddy process exited early."
             echo "===== tail -100 caddy.log ====="
             tail -100 caddy.log
