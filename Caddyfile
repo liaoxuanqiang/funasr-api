@@ -1,7 +1,6 @@
 # Caddy gateway for the FunASR deployment.
 #
-# The Cloudflare Tunnel origin is fixed by the dashboard-managed (remote)
-# config to http://localhost:10095. Caddy listens on :10095 and:
+# Caddy listens on :80 (the Cloudflare Tunnel origin). It:
 #   * serves the PWA static frontend (pwa/) at the site root, and
 #   * reverse-proxies the FunASR HTTP API paths to the internal ASR server
 #     (running on port 10097).
@@ -15,7 +14,7 @@
     auto_https off
 }
 
-:10095 {
+:80 {
     encode gzip
 
     # ---- FunASR API paths are forwarded to the internal ASR server ----

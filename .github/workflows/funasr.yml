@@ -14,12 +14,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
-      # Caddy PWA gateway port (the Cloudflare Tunnel origin is fixed by the
-      # dashboard-managed remote config to http://localhost:10095).
-      SERVER_PORT: "10095"
+      # Caddy PWA gateway port (the Cloudflare Tunnel origin must match this).
+      SERVER_PORT: "80"
       # Internal FunASR ASR server port (behind the Caddy gateway).
       ASR_PORT: "10097"
-      SERVER_HEALTH_URL: "http://127.0.0.1:10095/health"
+      SERVER_HEALTH_URL: "http://127.0.0.1:80/health"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

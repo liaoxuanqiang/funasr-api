@@ -55,7 +55,7 @@ GitHub Actions Runner
     │
     ├── 启动 FunASR 服务（127.0.0.1:10097，paraformer-zh 模型）
     │
-    ├── 启动 Caddy PWA 网关（侦听 127.0.0.1:10095，即隧道源站）
+    ├── 启动 Caddy PWA 网关（侦听 127.0.0.1:80，即隧道源站）
     │        ├── 静态服务：PWA 前端（根路径 /）
     │        └── 反向代理：/health、/asr、/recognize、/v1/* 等 → FunASR (127.0.0.1:10097)
     │
@@ -65,8 +65,8 @@ GitHub Actions Runner
 ```
 
 > 💡 为什么网关放在源站端口：当前隧道以 `--token` 运行，属于**远程托管（Remote Managed）**隧道，
-> 其入口规则由 Cloudflare 控制台远程配置决定并指向 `localhost:10095`，工作流无法在本地覆盖。
-> 因此将 **Caddy 网关**绑定在 `10095`（PWA + API 代理），FunASR 服务内移至 `10097`。
+> 其入口规则由 Cloudflare 控制台远程配置决定并指向 `localhost:80`，工作流无法在本地覆盖。
+> 因此将 **Caddy 网关**绑定在 `80`（PWA + API 代理），FunASR 服务内移至 `10097`。
 
 ## 工作流配置说明
 
@@ -102,9 +102,9 @@ concurrency:
 | 4 | Install dependencies | 安装 `funasr`、`torch`、`torchaudio`、`modelscope`、`uvicorn`、`fastapi`、`python-multipart` |
 | 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `10097`，CPU 推理，`paraformer-zh` 模型，模型从 HuggingFace 下载），并轮询健康检查等待就绪 |
 | 6 | Install Caddy | 从 GitHub Releases 下载并安装固定版本 Caddy（v2.11.4，静态服务器 / 反向代理），含 gzip 完整性校验 |
-| 7 | Start PWA gateway | 在源站端口 `10095` 启动 Caddy 网关：根路径 `/` 提供 PWA 界面，`/health`、`/asr`、`/recognize`、`/v1/*` 等反向代理到 FunASR，并执行 PWA 资源 / 代理连通性检查 |
+| 7 | Start PWA gateway | 在源站端口 `80` 启动 Caddy 网关：根路径 `/` 提供 PWA 界面，`/health`、`/asr`、`/recognize`、`/v1/*` 等反向代理到 FunASR，并执行 PWA 资源 / 代理连通性检查 |
 | 8 | Install cloudflared | 下载并安装 Cloudflare Tunnel 客户端 |
-| 9 | Start cloudflared tunnel | 使用 Token 启动隧道，将 `10095` 网关暴露到公网 |
+| 9 | Start cloudflared tunnel | 使用 Token 启动隧道，将 `80` 网关暴露到公网 |
 | 10 | Keep runner alive | 无限循环保持 runner 存活，从而维持服务持续运行 |
 
 ### 关键配置项
@@ -113,9 +113,9 @@ concurrency:
 |------|--------|------|
 | `runs-on` | `ubuntu-22.04` | 运行环境 |
 | `timeout-minutes` | `360` | 任务超时上限（6 小时），超过后平台强制终止 |
-| `SERVER_PORT` | `10095` | Caddy PWA 网关监听端口（**隧道源站端口**，不可随意改动） |
+| `SERVER_PORT` | `80` | Caddy PWA 网关监听端口（**隧道源站端口**，须与 Cloudflare 控制台入口一致） |
 | `ASR_PORT` | `10097` | FunASR 服务内网监听端口（仅本机可访问） |
-| `SERVER_HEALTH_URL` | `http://127.0.0.1:10095/health` | 经网关的健康检查地址（验证 PWA 网关 → FunASR 链路） |
+| `SERVER_HEALTH_URL` | `http://127.0.0.1:80/health` | 经网关的健康检查地址（验证 PWA 网关 → FunASR 链路） |
 | 模型 | `paraformer`（HuggingFace） | 中文语音识别模型，`--model paraformer` |
 | FunASR 健康检查轮询 | 60 次 × 5 秒 | 最长等待约 5 分钟 |
 | PWA 网关健康检查轮询 | 30 次 × 2 秒 | 最长等待约 1 分钟 |
@@ -124,7 +124,7 @@ concurrency:
 
 | 名称 | 类型 | 位置 | 说明 |
 |------|------|------|------|
-| `SERVER_PORT` | 工作流变量 | 工作流 `env` | Caddy PWA 网关端口（默认 `10095`，即隧道源站） |
+| `SERVER_PORT` | 工作流变量 | 工作流 `env` | Caddy PWA 网关端口（默认 `80`，即隧道源站） |
 | `ASR_PORT` | 工作流变量 | 工作流 `env` | FunASR 服务内网端口（默认 `10097`） |
 | `SERVER_HEALTH_URL` | 工作流变量 | 工作流 `env` | 经网关的健康检查地址 |
 | `CLOUDFLARE_TUNNEL_TOKEN` | **GitHub Secrets** | 仓库 Settings → Secrets and variables → Actions | Cloudflare Tunnel 的认证 Token |
@@ -196,7 +196,7 @@ cd pwa && python -m http.server 8080
 ## 注意事项
 
 1. **Runner 生命周期限制**：GitHub runner 在任务结束后会被销毁，服务随之停止。当前方案以"无限循环保持 runner 存活"的方式运行，受平台 6 小时上限约束。
-2. **源站端口不可随意改动**：隧道为远程托管（`--token`），Cloudflare 控制台的入口规则指向 `localhost:10095`。`SERVER_PORT` 必须保持 `10095`（Caddy 网关），否则隧道将无法访问服务。若需更换端口，请在 Cloudflare 控制台同步修改。
+2. **源站端口须与隧道入口一致**：隧道为远程托管（`--token`），Cloudflare 控制台的入口规则须指向 `localhost:80`（对应 `SERVER_PORT`）。若更换端口，请同时修改 `SERVER_PORT`、`Caddyfile` 并在 Cloudflare 控制台同步更新入口，否则隧道将无法访问服务。
 3. **生产环境建议**：如需 7×24 稳定运行，建议改用**云主机 + systemd/Docker** 托管 FunASR、Caddy 与 Cloudflare Tunnel，GitHub Actions 仅负责构建与部署。
 4. **定时任务触发间隔**：GitHub 官方要求 cron 任务的最小间隔为 5 分钟，本配置的 6 小时间隔远高于该限制。
 5. **并发排队**：由于 `cancel-in-progress: false`，若上一个运行尚未结束，新触发的定时任务将排队等待，可能导致定时任务"实际运行时间"晚于计划时间。
