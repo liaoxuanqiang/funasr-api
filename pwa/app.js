@@ -315,14 +315,23 @@ async function transcribe() {
       }
 
       if (!res.ok) {
+        // Read the body exactly once (a Response body can only be read a
+        // single time), then try to parse it as JSON for a friendlier message.
         let detail = "";
         try {
-          const errJson = await res.json();
-          detail = errJson.detail || errJson.message || JSON.stringify(errJson);
-        } catch (err) {
           detail = await res.text();
+        } catch (err) {
+          detail = "";
         }
-        throw new Error(`服务返回错误（${res.status}）：${detail}`);
+        if (detail) {
+          try {
+            const errJson = JSON.parse(detail);
+            detail = errJson.detail || errJson.message || JSON.stringify(errJson);
+          } catch (err) {
+            /* keep the raw text */
+          }
+        }
+        throw new Error(`服务返回错误（${res.status}）：${detail || "未知错误"}`);
       }
 
       const payload = await res.json();
