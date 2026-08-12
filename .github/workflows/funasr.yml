@@ -78,8 +78,19 @@ jobs:
 
       - name: Install Caddy
         run: |
-          curl -fsSL -o caddy.tar.gz \
-            "https://caddyserver.com/api/download?os=linux&arch=amd64"
+          CADDY_VERSION="v2.11.4"
+          echo "Downloading Caddy ${CADDY_VERSION} from GitHub Releases"
+          curl -fsSL --retry 3 --retry-all-errors -o caddy.tar.gz \
+            "https://github.com/caddyserver/caddy/releases/download/${CADDY_VERSION}/caddy_${CADDY_VERSION#v}_linux_amd64.tar.gz"
+          echo "Downloaded:"
+          ls -l caddy.tar.gz
+          # Sanity check: fail early with a clear message if the download is not gzip.
+          if ! gzip -t caddy.tar.gz; then
+            echo "ERROR: downloaded file is not a valid gzip archive."
+            echo "----- first 400 bytes -----"
+            head -c 400 caddy.tar.gz || true
+            exit 1
+          fi
           tar -xzf caddy.tar.gz
           sudo mv caddy /usr/local/bin/
           echo "Caddy version:"

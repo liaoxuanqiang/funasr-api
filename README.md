@@ -101,7 +101,7 @@ concurrency:
 | 3 | Cache pip dependencies | 缓存 pip 下载的依赖包，加速安装 |
 | 4 | Install dependencies | 安装 `funasr`、`torch`、`torchaudio`、`modelscope`、`uvicorn`、`fastapi`、`python-multipart` |
 | 5 | Start FunASR server | 后台启动 FunASR 服务（内网端口 `10097`，CPU 推理，`paraformer-zh` 模型，模型从 HuggingFace 下载），并轮询健康检查等待就绪 |
-| 6 | Install Caddy | 下载并安装 Caddy 静态服务器 / 反向代理 |
+| 6 | Install Caddy | 从 GitHub Releases 下载并安装固定版本 Caddy（v2.11.4，静态服务器 / 反向代理），含 gzip 完整性校验 |
 | 7 | Start PWA gateway | 在源站端口 `10095` 启动 Caddy 网关：根路径 `/` 提供 PWA 界面，`/health`、`/asr`、`/recognize`、`/v1/*` 等反向代理到 FunASR，并执行 PWA 资源 / 代理连通性检查 |
 | 8 | Install cloudflared | 下载并安装 Cloudflare Tunnel 客户端 |
 | 9 | Start cloudflared tunnel | 使用 Token 启动隧道，将 `10095` 网关暴露到公网 |
