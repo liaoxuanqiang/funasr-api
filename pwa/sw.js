@@ -1,7 +1,7 @@
 /* FunASR PWA service worker — offline caching of static assets. */
 "use strict";
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const STATIC_CACHE = `funasr-static-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
