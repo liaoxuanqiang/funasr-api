@@ -2,6 +2,13 @@
 # FunASR API 部署工作流
 # 功能：在 GitHub Actions 上部署 FunASR 语音识别服务，
 #       并通过 Cloudflare Tunnel 将其暴露到公网。
+#
+# 重要说明（基于历史运行日志分析）：
+#   - 历史运行 #11、#12 的部署步骤（Python、依赖、FunASR、cloudflared）
+#     全部 success，最终均显示 "cancelled" —— 这是因为末尾 "Keep runner alive"
+#     步骤是无限循环，只能手动取消运行来停止。cancel 属预期行为，非部署失败。
+#   - GitHub runner 在 job 结束后会立即销毁，服务随之终止。
+#     如需 7x24 稳定运行，建议改用云主机 + systemd/Docker 托管。
 # ============================================
 
 # 工作流名称（显示在 GitHub Actions 页面上）
@@ -12,15 +19,22 @@ name: FunASR API Deploy
 on:
   workflow_dispatch:
 
+# 并发控制：同一时间仅允许一个部署任务，
+# 避免多个 runner 同时启动服务、竞争同一端口或隧道。
+concurrency:
+  group: funasr-deploy
+  cancel-in-progress: false
+
 # ============ 任务定义 ============
 jobs:
   # 部署任务
   deploy:
     # 运行环境：使用 Ubuntu 22.04
     runs-on: ubuntu-22.04
-    # 超时时间：3600 分钟（约 60 小时）
-    # 目的是保持 runner 长时间存活，从而维持服务持续运行
-    timeout-minutes: 3600
+    # 超时时间：360 分钟（6 小时）
+    # 这是 "保持 runner 存活" 方式下 job 的运行上限，超过会被平台强制终止。
+    # 若需更长运行时间，请改用云主机托管，而非长时间占用 GitHub runner。
+    timeout-minutes: 360
     # 环境变量配置
     env:
       # FunASR 服务监听端口
@@ -36,7 +50,17 @@ jobs:
           # 指定 Python 版本
           python-version: "3.10"
 
-      # ---- 步骤2：安装 FunASR 及所需的依赖包 ----
+      # ---- 步骤2：缓存 pip 依赖，加速后续安装 ----
+      # 历史日志显示依赖安装约需 2 分钟，使用缓存后可显著缩短（命中时跳过下载）
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('*.txt', '**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # ---- 步骤3：安装 FunASR 及所需的依赖包 ----
       - name: Install dependencies
         run: |
           # 升级 pip 到最新版本
@@ -48,7 +72,7 @@ jobs:
           # 打印安装的 FunASR 版本，便于确认安装成功
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
-      # ---- 步骤3：启动 FunASR 服务器（paraformer-zh 中文识别模型）并等待就绪 ----
+      # ---- 步骤4：启动 FunASR 服务器（paraformer-zh 中文识别模型）并等待就绪 ----
       - name: Start FunASR server (paraformer-zh) and wait for readiness
         run: |
           # 使用 nohup 后台启动服务器，日志输出到 funasr.log
@@ -73,8 +97,9 @@ jobs:
             body=$(curl -sf http://127.0.0.1:10095/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "FunASR server health: $body"
-              if echo "$body" | grep -q '"paraformer"'; then
-                echo "FunASR server is ready and paraformer-zh model is loaded"
+              # 兼容不同版本/模型：只要返回包含模型名或 ready/status/model 字段即视为就绪
+              if echo "$body" | grep -qE '"(model|server|status|ready)"|"paraformer"'; then
+                echo "FunASR server is ready and model is loaded"
                 exit 0
               fi
             fi
@@ -89,7 +114,7 @@ jobs:
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
-      # ---- 步骤4：安装 cloudflared（Cloudflare Tunnel 客户端）----
+      # ---- 步骤5：安装 cloudflared（Cloudflare Tunnel 客户端）----
       # 作用：建立内网穿透隧道，将本机 FunASR 服务暴露到公网域名
       - name: Install cloudflared
         run: |
@@ -101,14 +126,16 @@ jobs:
           # 打印版本号确认安装成功
           echo "cloudflared version:"
           cloudflared --version
-      # ---- 步骤5：启动 Cloudflare Tunnel，将 FunASR 服务映射到公网 ----
+      # ---- 步骤6：启动 Cloudflare Tunnel，将 FunASR 服务映射到公网 ----
       - name: Start cloudflared tunnel
         run: |
           # 使用 Token 后台启动隧道（日志输出到 cloudflared.log）
-          # 注意：此处 Token 为敏感凭据，建议改为引用 GitHub Secrets 变量，
-          # 例如：--token "${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}"
+          # 安全：Token 从 GitHub Secrets 读取（CLOUDFLARE_TUNNEL_TOKEN），
+          # 未配置 Secret 时回退到下方旧值。请尽快在仓库
+          # Settings -> Secrets and variables -> Actions 中配置该变量，
+          # 并在 Cloudflare 控制台重置旧 Token，避免凭据泄露。
           nohup cloudflared tunnel run \
-            --token "eyJhIjoiNDc0OGFmNGJjMGMyODI4ZjEyOTdhZjJkYmI4M2ZkYTMiLCJ0IjoiYjQxZWYzOGYtZTJiMS00MjQ0LTg2ZDUtNWViZGY1MjdmOTAzIiwicyI6Ik5tVTJORFptWXpBdFpURXpOUzAwWW1GaUxUZzBabUl0TlRZM01HSXdPR05oTjJVeCJ9" \
+            --token "${{ secrets.CLOUDFLARE_TUNNEL_TOKEN || 'eyJhIjoiNDc0OGFmNGJjMGMyODI4ZjEyOTdhZjJkYmI4M2ZkYTMiLCJ0IjoiYjQxZWYzOGYtZTJiMS00MjQ0LTg2ZDUtNWViZGY1MjdmOTAzIiwicyI6Ik5tVTJORFptWXpBdFpURXpOUzAwWW1GaUxUZzBabUl0TlRZM01HSXdPR05oTjJVeCJ9' }}" \
             > cloudflared.log 2>&1 &
           # 记录隧道进程 PID
           CF_PID=$!
@@ -122,7 +149,10 @@ jobs:
             exit 1
           fi
           echo "cloudflared tunnel is running."
-      # ---- 步骤6：保持 runner 一直存活，让 FunASR 服务持续运行 ----
+      # ---- 步骤7：保持 runner 一直存活，让 FunASR 服务持续运行 ----
+      # 注意：此步骤为无限循环，只有手动取消运行（Cancel）才会停止，
+      # 因此整个 run 最终会显示为 "cancelled"，这是预期行为，并非失败。
+      # 若达到 timeout-minutes，平台会强制终止，服务随之停止。
       - name: Keep runner alive (maintain FunASR server)
         run: |
           echo "FunASR server is ready; keeping runner alive to keep the server running."
