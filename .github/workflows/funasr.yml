@@ -54,7 +54,7 @@ jobs:
             > funasr.log 2>&1 &
           SERVER_PID=$!
           echo "FunASR server PID: $SERVER_PID (port $ASR_PORT)"
-          for i in $(seq 1 60); do
+          for i in $(seq 1 120); do
             body=$(curl -sf http://127.0.0.1:$ASR_PORT/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "FunASR server health: $body"
@@ -67,7 +67,7 @@ jobs:
               echo "FunASR server process ($SERVER_PID) exited early."
               break
             fi
-            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/60)"
+            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/120)"
             sleep 5
           done
           echo "FunASR server did not become ready in time."
