@@ -43,34 +43,45 @@ jobs:
           pip install uvicorn fastapi python-multipart
           echo "FunASR version:"
           python -c "import funasr; print(funasr.__version__)"
-      - name: Start FunASR server (paraformer-zh) and wait for readiness
+          # ffmpeg is required to decode webm/opus recordings from the PWA's
+          # MediaRecorder (soundfile alone cannot).  The runner image usually
+          # ships it; install quietly if absent.
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+      - name: Start ASR server (custom wrapper over FunASR paraformer-zh) and wait for readiness
         run: |
-          nohup python -m funasr.bin.server \
+          # Run our own thin FastAPI server (asr_server.py) instead of
+          # `python -m funasr.bin.server`, which crashes with HTTP 500
+          # (IndexError: list index out of range) whenever the ASR model returns
+          # an empty result list (silence / too-short / undecodable audio).
+          # The wrapper returns a graceful 200 with empty text instead.
+          cd "$GITHUB_WORKSPACE"
+          nohup python -m uvicorn asr_server:app \
             --host 127.0.0.1 \
-            --port $ASR_PORT \
-            --device cpu \
-            --model paraformer \
-            --hub ms \
+            --port "$ASR_PORT" \
+            --log-level info \
             > funasr.log 2>&1 &
           SERVER_PID=$!
-          echo "FunASR server PID: $SERVER_PID (port $ASR_PORT)"
+          echo "ASR server PID: $SERVER_PID (port $ASR_PORT)"
           for i in $(seq 1 360); do
             body=$(curl -sf http://127.0.0.1:$ASR_PORT/health 2>/dev/null || true)
             if [ -n "$body" ]; then
-              echo "FunASR server health: $body"
+              echo "ASR server health: $body"
               if echo "$body" | grep -qE '"(model|server|status|ready)"|"paraformer"'; then
-                echo "FunASR server is ready and model is loaded"
+                echo "ASR server is ready"
                 exit 0
               fi
             fi
             if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-              echo "FunASR server process ($SERVER_PID) exited early."
+              echo "ASR server process ($SERVER_PID) exited early."
               break
             fi
-            echo "Waiting for FunASR server (paraformer-zh) to start... ($i/360)"
+            echo "Waiting for ASR server to start... ($i/360)"
             sleep 5
           done
-          echo "FunASR server did not become ready in time."
+          echo "ASR server did not become ready in time."
           echo "===== tail -200 funasr.log ====="
           tail -200 funasr.log
           exit 1
