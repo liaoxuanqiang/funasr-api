@@ -166,25 +166,20 @@ jobs:
 
       - name: Smoke-test transcription API
         run: |
-          # Generate a short silence WAV and POST it to /v1/audio/transcriptions
-          # to verify the end-to-end ASR pipeline (gateway -> FunASR backend).
-          # This surfaces any HTTP 500 from the ASR server during deployment,
-          # with funasr.log printed for diagnosis.
-          python - <<'PY'
-          import wave, struct, math, io
-          sr = 16000
-          frames = int(sr * 1.0)  # 1 second
-          with wave.open("smoke.wav", "wb") as w:
-              w.setnchannels(1)
-              w.setsampwidth(2)
-              w.setframerate(sr)
-              data = b"".join(
-                  struct.pack("<h", int(4000 * math.sin(2 * math.pi * 440 * i / sr)))
-                  for i in range(frames)
-              )
-              w.writeframes(data)
-          print("wrote smoke.wav")
-          PY
+          # Download a REAL Chinese speech sample (FunASR's official example
+          # audio) and POST it to /v1/audio/transcriptions to verify the
+          # end-to-end ASR pipeline (gateway -> FunASR backend).
+          #
+          # IMPORTANT: a synthetic tone is NOT valid here - when the audio
+          # contains no speech, FunASR returns an empty result list and its
+          # server crashes with "IndexError: list index out of range" in
+          # _process_fallback -> HTTP 500.  Using real speech exercises the
+          # actual pipeline and surfaces any HTTP 500 from the ASR server during
+          # deployment, with funasr.log printed for diagnosis.
+          curl -fsSL --retry 3 --retry-all-errors -o smoke.wav \
+            "https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav"
+          echo "downloaded smoke.wav:"
+          ls -l smoke.wav
           echo "===== POST /v1/audio/transcriptions ====="
           resp=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
             -F "file=@smoke.wav;type=audio/wav" \
@@ -202,6 +197,16 @@ jobs:
             tail -100 caddy.log || true
             exit 1
           fi
+          # Confirms the ASR actually recognized speech (not just a 200 from an
+          # empty result).  The OpenAI-compatible endpoint returns JSON with a
+          # non-empty "text" field for real speech.
+          if ! echo "$resp" | grep -q '"text"' || echo "$resp" | grep -q '"text":"[[:space:]]*"'; then
+            echo "ERROR: smoke test returned 200 but no recognized text."
+            echo "===== tail -200 funasr.log ====="
+            tail -200 funasr.log || true
+            exit 1
+          fi
+          echo "SMOKE TEST PASSED: recognized non-empty text."
 
       - name: Install cloudflared
         run: |
