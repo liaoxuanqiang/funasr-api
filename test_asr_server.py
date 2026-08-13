@@ -28,6 +28,7 @@ class _F:
 
     def __init__(self, *a, **k):
         self.routes = []
+        self.state = types.SimpleNamespace(ready=False)
 
     def add_middleware(self, *a, **k):
         self._mw = (a, k)
@@ -77,6 +78,10 @@ fastapi_mod.UploadFile = _UploadFile
 fastapi_mod.HTTPException = _HTTPException
 fastapi_cors.CORSMiddleware = object
 sys.modules["fastapi"] = fastapi_mod
+# asr_server.py also imports `from fastapi.responses import JSONResponse`.
+fastapi_responses = types.ModuleType("fastapi.responses")
+fastapi_responses.JSONResponse = lambda *a, **k: None
+sys.modules["fastapi.responses"] = fastapi_responses
 sys.modules["fastapi.middleware"] = types.ModuleType("fastapi.middleware")
 sys.modules["fastapi.middleware.cors"] = fastapi_cors
 

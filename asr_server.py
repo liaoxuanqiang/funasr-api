@@ -19,18 +19,59 @@ import io
 import os
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 
 import numpy as np
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 MODEL = "paraformer-zh"   # Chinese ASR + punctuation (ModelScope id)
 HUB = os.environ.get("ASR_HUB", "ms")
 DEVICE = os.environ.get("ASR_DEVICE", "cpu")
 TARGET_SR = 16000
 
-app = FastAPI(title="FunASR API", version="1.0.0")
+_model = None
+
+
+def _load_model():
+    """Build the FunASR AutoModel pipeline (paraformer-zh + VAD + punctuation)."""
+    from funasr import AutoModel
+
+    kwargs = {
+        "model": MODEL,
+        "hub": HUB,
+        "device": DEVICE,
+        "vad_model": "fsmn-vad",
+        "punc_model": "ct-punc",
+    }
+    try:
+        kwargs["disable_update"] = True
+    except Exception:
+        pass
+    return AutoModel(**kwargs)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Eagerly load the model at startup (before the port accepts requests).
+
+    The model weights are downloaded from ModelScope on first deploy and this
+    can take many minutes.  By loading here instead of lazily inside the first
+    transcription request, the workflow's readiness poll on /health genuinely
+    waits for the model, and requests never hang against a half-loaded server.
+    """
+    app.state.ready = False
+    print("Loading FunASR model (%s, hub=%s, device=%s) ..." % (MODEL, HUB, DEVICE), flush=True)
+    get_model()
+    app.state.ready = True
+    print("FunASR model ready.", flush=True)
+    yield
+
+
+app = FastAPI(title="FunASR API", version="1.0.0", lifespan=lifespan)
+app.state.ready = False
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,28 +79,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_model = None
-
 
 def get_model():
-    """Lazily load the FunASR AutoModel pipeline (paraformer-zh + VAD + punctuation)."""
+    """Return the cached FunASR model, loading it once."""
     global _model
     if _model is None:
-        from funasr import AutoModel
-
-        kwargs = {
-            "model": MODEL,
-            "hub": HUB,
-            "device": DEVICE,
-        }
-        # These mirror the FunASR reference demo for Chinese punctuation.
-        kwargs["vad_model"] = "fsmn-vad"
-        kwargs["punc_model"] = "ct-punc"
-        try:
-            kwargs["disable_update"] = True
-        except Exception:
-            pass
-        _model = AutoModel(**kwargs)
+        _model = _load_model()
     return _model
 
 
@@ -155,6 +180,14 @@ def _recognize(file: UploadFile, language: str = "auto"):
 
 @app.get("/health")
 def health():
+    if not app.state.ready:
+        # 503 while the model is still loading so a readiness poll genuinely
+        # blocks until inference is available (instead of returning "ok" for a
+        # server that would hang on the first real transcription request).
+        return JSONResponse(
+            status_code=503,
+            content={"status": "loading", "device": DEVICE, "models_loaded": []},
+        )
     return {"status": "ok", "device": DEVICE, "models_loaded": [MODEL]}
 
 

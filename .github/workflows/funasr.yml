@@ -65,8 +65,11 @@ jobs:
             > funasr.log 2>&1 &
           SERVER_PID=$!
           echo "ASR server PID: $SERVER_PID (port $ASR_PORT)"
+          echo "Waiting for the ASR model to download/load (first deploy can take several minutes)..."
           for i in $(seq 1 360); do
-            body=$(curl -sf http://127.0.0.1:$ASR_PORT/health 2>/dev/null || true)
+            # --max-time so a connecting-but-not-yet-accepting server can't hang
+            # the readiness poll; it just fails and we keep waiting.
+            body=$(curl -sf --max-time 10 http://127.0.0.1:$ASR_PORT/health 2>/dev/null || true)
             if [ -n "$body" ]; then
               echo "ASR server health: $body"
               if echo "$body" | grep -qE '"(model|server|status|ready)"|"paraformer"'; then
@@ -192,7 +195,10 @@ jobs:
           echo "downloaded smoke.wav:"
           ls -l smoke.wav
           echo "===== POST /v1/audio/transcriptions ====="
-          resp=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+          # --max-time guards against an indefinite hang (e.g. if the ASR
+          # backend is still warming up); fail cleanly instead of blocking the
+          # whole run until it is cancelled.
+          resp=$(curl -sS --max-time 600 -w "\nHTTP_STATUS:%{http_code}" \
             -F "file=@smoke.wav;type=audio/wav" \
             -F "model=paraformer" \
             "http://127.0.0.1:$SERVER_PORT/v1/audio/transcriptions" 2>&1)
